@@ -1,0 +1,21 @@
+{
+  "name": "Tahir GPT",
+  "short_name": "Tahir GPT",
+  "description": "Advanced AI assistant with Nano and Pro modes",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050508",
+  "theme_color": "#050508",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "New Chat", "url": "/chat", "description": "Start a new conversation" },
+    { "name": "Build Mode", "url": "/build", "description": "Build with AI" },
+    { "name": "Image Generation", "url": "/image", "description": "Generate images" }
+  ]
+}
