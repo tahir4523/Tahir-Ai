@@ -1,139 +1,128 @@
 'use client';
 
 import { useState } from 'react';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/navigation';
 
-export default function ImagePage() {
-  const [prompt, setPrompt] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
-  const [revisedPrompt, setRevisedPrompt] = useState('');
-  const [loading, setLoading] = useState(false);
+type Step = 'email' | 'otp' | 'loading';
+
+export default function LoginPage() {
+  const [step, setStep] = useState<Step>('email');
+  const [email, setEmail] = useState('');
+  const [otp, setOtp] = useState('');
   const [error, setError] = useState('');
-  const [size, setSize] = useState('1024x1024');
+  const [loading, setLoading] = useState(false);
+  const supabase = createClientComponentClient();
   const router = useRouter();
 
-  async function generate() {
-    if (!prompt.trim()) return;
-    setLoading(true); setError(''); setImageUrl(''); setRevisedPrompt('');
-
-    try {
-      const res = await fetch('/api/image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, size }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      setImageUrl(data.imageUrl);
-      setRevisedPrompt(data.revisedPrompt ?? '');
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+  async function handleSendOTP() {
+    if (!email || !email.includes('@')) { setError('Please enter a valid email'); return; }
+    setLoading(true); setError('');
+    const { error } = await supabase.auth.signInWithOtp({ email });
+    setLoading(false);
+    if (error) setError(error.message);
+    else setStep('otp');
   }
 
-  async function downloadImage() {
-    if (!imageUrl) return;
-    const a = document.createElement('a');
-    a.href = imageUrl;
-    a.download = 'tahir-gpt-image.png';
-    a.target = '_blank';
-    a.click();
+  async function handleVerifyOTP() {
+    if (otp.length < 6) { setError('Enter the 6-digit code'); return; }
+    setLoading(true); setError('');
+    const { error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
+    setLoading(false);
+    if (error) setError('Invalid or expired code');
+    else { setStep('loading'); router.replace('/chat'); }
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', padding: '1.5rem' }}>
-      <div style={{ maxWidth: '720px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-          <button onClick={() => router.back()} style={{
-            background: 'none', border: '1px solid var(--border)', borderRadius: '8px',
-            padding: '0.4rem 0.8rem', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem',
-          }}>← Back</button>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', color: 'var(--text-primary)' }}>
-            Image Generation
-          </h1>
-          <span className="badge-pro">Pro</span>
-        </div>
+    <div style={{
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: '1rem', background: 'var(--bg-primary)', position: 'relative', overflow: 'hidden',
+    }}>
+      {/* Ambient glow */}
+      <div style={{
+        position: 'absolute', top: '15%', left: '50%', transform: 'translateX(-50%)',
+        width: '700px', height: '700px', borderRadius: '50%', pointerEvents: 'none',
+        background: 'radial-gradient(circle, rgba(251,191,36,0.07) 0%, transparent 65%)',
+      }} />
 
-        {/* Input */}
-        <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
-          <textarea
-            value={prompt}
-            onChange={e => setPrompt(e.target.value)}
-            placeholder="Describe the image you want to create…"
-            rows={3}
-            style={{
-              width: '100%', background: 'none', border: 'none', outline: 'none', resize: 'none',
-              color: 'var(--text-primary)', fontFamily: 'var(--font-body)', fontSize: '0.95rem',
-              lineHeight: 1.6, marginBottom: '1rem',
-            }}
-          />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <select
-              value={size}
-              onChange={e => setSize(e.target.value)}
-              style={{
-                background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px',
-                color: 'var(--text-primary)', padding: '0.4rem 0.75rem', fontSize: '0.83rem', cursor: 'pointer',
-              }}
-            >
-              <option value="1024x1024">Square (1024×1024)</option>
-              <option value="1792x1024">Wide (1792×1024)</option>
-              <option value="1024x1792">Portrait (1024×1792)</option>
-            </select>
-            <button onClick={generate} disabled={loading || !prompt.trim()} className="btn-primary"
-              style={{ opacity: loading || !prompt.trim() ? 0.6 : 1 }}>
-              {loading ? 'Generating…' : '🎨 Generate'}
-            </button>
-          </div>
-        </div>
-
-        {/* Loading state */}
-        {loading && (
-          <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
-            <div style={{
-              width: '60px', height: '60px', borderRadius: '50%', margin: '0 auto 1rem',
-              border: '3px solid rgba(251,191,36,0.2)', borderTopColor: '#fbbf24',
-              animation: 'spin 1s linear infinite',
-            }} />
-            <p style={{ color: 'var(--text-secondary)' }}>Creating your image…</p>
-            <p style={{ color: 'rgba(136,136,170,0.5)', fontSize: '0.8rem', marginTop: '0.25rem' }}>This takes ~10 seconds</p>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
+      <div style={{ width: '100%', maxWidth: '420px', position: 'relative', zIndex: 1 }}>
+        {/* Logo */}
+        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
           <div style={{
-            padding: '1rem', borderRadius: '12px', marginBottom: '1rem',
-            background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)',
-            color: '#f87171', fontSize: '0.9rem',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: '68px', height: '68px', borderRadius: '22px',
+            background: 'linear-gradient(135deg, #fbbf24 0%, #d97706 100%)',
+            marginBottom: '1.25rem', boxShadow: '0 0 50px rgba(251,191,36,0.35)',
           }}>
-            ⚠️ {error}
+            <span style={{ fontSize: '30px', fontWeight: 900, color: '#000', fontFamily: 'var(--font-display)' }}>T</span>
           </div>
-        )}
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2.2rem', fontWeight: 700, color: '#f8f8f8', marginBottom: '0.5rem' }}>
+            Tahir <span style={{ background: 'linear-gradient(135deg, #fbbf24, #d97706)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>GPT</span>
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Intelligence redefined</p>
+        </div>
 
-        {/* Result */}
-        {imageUrl && !loading && (
-          <div className="card" style={{ overflow: 'hidden' }}>
-            <img src={imageUrl} alt={prompt} style={{ width: '100%', display: 'block' }} />
-            <div style={{ padding: '1rem' }}>
-              {revisedPrompt && (
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem', fontStyle: 'italic' }}>
-                  Revised: {revisedPrompt}
-                </p>
-              )}
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <button onClick={downloadImage} className="btn-primary" style={{ fontSize: '0.85rem' }}>
-                  ↓ Download
-                </button>
-                <button onClick={generate} className="btn-ghost" style={{ fontSize: '0.85rem' }}>
-                  ↺ Regenerate
-                </button>
-              </div>
+        {/* Card */}
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: '20px', padding: '2rem',
+          boxShadow: '0 30px 60px rgba(0,0,0,0.6)',
+        }}>
+          {step === 'loading' ? (
+            <div style={{ textAlign: 'center', padding: '2rem 0' }}>
+              <div style={{
+                width: '44px', height: '44px', borderRadius: '50%',
+                border: '2px solid rgba(251,191,36,0.2)', borderTopColor: '#fbbf24',
+                animation: 'spin 0.8s linear infinite', margin: '0 auto 1rem',
+              }} />
+              <p style={{ color: 'var(--text-secondary)' }}>Signing you in…</p>
             </div>
-          </div>
-        )}
+          ) : step === 'email' ? (
+            <>
+              <h2 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '1.25rem', color: 'var(--text-primary)' }}>Enter your email</h2>
+              <input type="email" placeholder="you@example.com" value={email}
+                onChange={e => { setEmail(e.target.value); setError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleSendOTP()}
+                className="input-field" style={{ padding: '0.75rem 1rem', fontSize: '1rem', marginBottom: '0.75rem' }}
+              />
+              {error && <p style={{ color: '#f87171', fontSize: '0.83rem', marginBottom: '0.75rem' }}>{error}</p>}
+              <button onClick={handleSendOTP} disabled={loading} className="btn-primary"
+                style={{ width: '100%', fontSize: '0.95rem', opacity: loading ? 0.7 : 1 }}>
+                {loading ? 'Sending…' : 'Send Login Code →'}
+              </button>
+              <p style={{ textAlign: 'center', fontSize: '0.78rem', color: 'rgba(136,136,170,0.6)', marginTop: '1rem' }}>
+                No password. We send a one-time code to your email.
+              </p>
+            </>
+          ) : (
+            <>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <h2 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.3rem' }}>Check your email</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                  Code sent to <span style={{ color: '#fbbf24', fontWeight: 500 }}>{email}</span>
+                </p>
+              </div>
+              <input type="text" placeholder="000000" value={otp} maxLength={6}
+                onChange={e => { setOtp(e.target.value.replace(/\D/g, '')); setError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleVerifyOTP()}
+                className="input-field" autoFocus
+                style={{
+                  padding: '0.875rem 1rem', fontSize: '1.75rem', textAlign: 'center',
+                  letterSpacing: '0.6rem', fontFamily: 'var(--font-mono)', marginBottom: '0.75rem',
+                }}
+              />
+              {error && <p style={{ color: '#f87171', fontSize: '0.83rem', marginBottom: '0.75rem' }}>{error}</p>}
+              <button onClick={handleVerifyOTP} disabled={loading} className="btn-primary"
+                style={{ width: '100%', fontSize: '0.95rem', opacity: loading ? 0.7 : 1, marginBottom: '0.5rem' }}>
+                {loading ? 'Verifying…' : 'Verify & Sign In'}
+              </button>
+              <button onClick={() => { setStep('email'); setOtp(''); setError(''); }} className="btn-ghost"
+                style={{ width: '100%', fontSize: '0.85rem' }}>
+                ← Use different email
+              </button>
+            </>
+          )}
+        </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
