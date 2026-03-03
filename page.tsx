@@ -1,144 +1,247 @@
-// app/auth/page.tsx
 'use client';
 
-import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function AuthPage() {
-  const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState<'email' | 'otp'>('email');
+interface BuildFile { path: string; language: string; content: string; description: string; }
+interface BuildStep { step: number; title: string; description: string; duration: string; }
+interface BuildResult {
+  title: string; description: string; steps: BuildStep[];
+  folderStructure: string; files: BuildFile[];
+  techStack: string[]; deployInstructions: string;
+  envVariables: { key: string; description: string; required: boolean }[];
+}
+
+export default function BuildPage() {
+  const [prompt, setPrompt] = useState('');
+  const [result, setResult] = useState<BuildResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-
-  const supabase = createClient();
+  const [activeTab, setActiveTab] = useState<'overview' | 'files' | 'deploy'>('overview');
+  const [activeFile, setActiveFile] = useState<number>(0);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get('redirectTo') || '/chat';
 
-  async function sendOTP() {
-    if (!email) return;
-    setLoading(true);
-    setError('');
+  useEffect(() => {
+    const p = searchParams.get('prompt');
+    if (p) { setPrompt(p); }
+  }, []);
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: true,
-      },
-    });
-
-    if (error) {
-      setError(error.message);
-    } else {
-      setMessage(`Code sent to ${email}`);
-      setStep('otp');
+  async function build() {
+    if (!prompt.trim()) return;
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const res = await fetch('/api/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Build failed');
+      setResult(data);
+      setActiveTab('overview');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
-  async function verifyOTP() {
-    if (!otp) return;
-    setLoading(true);
-    setError('');
-
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token: otp,
-      type: 'email',
-    });
-
-    if (error) {
-      setError('Invalid or expired code. Please try again.');
-    } else {
-      router.push(redirectTo);
-      router.refresh();
-    }
-    setLoading(false);
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text);
   }
+
+  const Tab = ({ id, label }: { id: typeof activeTab; label: string }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      style={{
+        padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '0.85rem', cursor: 'pointer',
+        background: activeTab === id ? 'rgba(251,191,36,0.15)' : 'transparent',
+        border: activeTab === id ? '1px solid rgba(251,191,36,0.3)' : '1px solid transparent',
+        color: activeTab === id ? '#fbbf24' : 'var(--text-secondary)',
+        fontWeight: activeTab === id ? 600 : 400,
+        transition: 'all 0.15s',
+      }}
+    >{label}</button>
+  );
 
   return (
-    <div className="min-h-screen bg-surface-base flex flex-col items-center justify-center px-4">
-      {/* Background glow */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-brand-500/5 blur-3xl" />
-      </div>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', padding: '1.5rem' }}>
+      <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
+          <button onClick={() => router.back()} style={{
+            background: 'none', border: '1px solid var(--border)', borderRadius: '8px',
+            padding: '0.4rem 0.8rem', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem',
+          }}>← Back</button>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', color: 'var(--text-primary)' }}>
+            🔧 Build Mode
+          </h1>
+        </div>
 
-      <div className="relative z-10 w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white font-bold text-2xl mb-4">
-            T
+        {/* Prompt input */}
+        <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+          <textarea
+            value={prompt}
+            onChange={e => setPrompt(e.target.value)}
+            placeholder='Describe what to build… e.g. "Build me a SaaS app for project management with Next.js"'
+            rows={3}
+            style={{
+              width: '100%', background: 'none', border: 'none', outline: 'none', resize: 'none',
+              color: 'var(--text-primary)', fontFamily: 'var(--font-body)', fontSize: '0.95rem',
+              lineHeight: 1.6, marginBottom: '1rem',
+            }}
+          />
+          <button onClick={build} disabled={loading || !prompt.trim()} className="btn-primary"
+            style={{ opacity: loading || !prompt.trim() ? 0.6 : 1 }}>
+            {loading ? '⚙️ Building…' : '🔧 Build It'}
+          </button>
+        </div>
+
+        {/* Loading */}
+        {loading && (
+          <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '1rem', animation: 'spin 2s linear infinite', display: 'inline-block' }}>⚙️</div>
+            <h3 style={{ color: 'var(--text-primary)', marginBottom: '0.5rem' }}>Building your project…</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Generating code, structure, and deployment guide</p>
           </div>
-          <h1 className="text-2xl font-bold text-white">Tahir GPT</h1>
-          <p className="text-slate-400 mt-1 text-sm">Sign in to start chatting</p>
-        </div>
+        )}
 
-        <div className="bg-surface-elevated border border-surface-border rounded-2xl p-8">
-          {step === 'email' ? (
-            <div className="animate-fade-in">
-              <h2 className="text-lg font-semibold text-white mb-6">Enter your email</h2>
-              <input
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendOTP()}
-                className="w-full bg-surface-overlay border border-surface-border rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:border-brand-500/70 transition-colors mb-4"
-                autoFocus
-              />
-              {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
-              <button
-                onClick={sendOTP}
-                disabled={loading || !email}
-                className="w-full bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-xl font-semibold transition-colors"
-              >
-                {loading ? 'Sending...' : 'Continue with email →'}
-              </button>
-              <p className="text-slate-500 text-xs text-center mt-4">
-                We&apos;ll send a 6-digit code to your email. No password needed.
-              </p>
+        {error && (
+          <div style={{
+            padding: '1rem', borderRadius: '12px', marginBottom: '1rem',
+            background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171',
+          }}>⚠️ {error}</div>
+        )}
+
+        {/* Result */}
+        {result && !loading && (
+          <div>
+            {/* Project header */}
+            <div className="card" style={{ padding: '1.5rem', marginBottom: '1rem' }}>
+              <h2 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
+                {result.title}
+              </h2>
+              <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>{result.description}</p>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {result.techStack?.map(t => (
+                  <span key={t} style={{
+                    padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem',
+                    background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.2)', color: '#38bdf8',
+                  }}>{t}</span>
+                ))}
+              </div>
             </div>
-          ) : (
-            <div className="animate-fade-in">
-              <button
-                onClick={() => { setStep('email'); setError(''); setOtp(''); }}
-                className="text-slate-400 hover:text-white text-sm mb-4 flex items-center gap-1 transition-colors"
-              >
-                ← Back
-              </button>
-              <h2 className="text-lg font-semibold text-white mb-2">Check your email</h2>
-              <p className="text-slate-400 text-sm mb-6">{message}</p>
-              <input
-                type="text"
-                placeholder="000000"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                onKeyDown={(e) => e.key === 'Enter' && verifyOTP()}
-                className="w-full bg-surface-overlay border border-surface-border rounded-xl px-4 py-3 text-white text-center text-2xl tracking-widest placeholder:text-slate-500 focus:outline-none focus:border-brand-500/70 transition-colors mb-4 font-mono"
-                autoFocus
-                maxLength={6}
-              />
-              {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
-              <button
-                onClick={verifyOTP}
-                disabled={loading || otp.length < 6}
-                className="w-full bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-xl font-semibold transition-colors"
-              >
-                {loading ? 'Verifying...' : 'Verify code'}
-              </button>
-              <button
-                onClick={sendOTP}
-                className="w-full text-slate-400 hover:text-white text-sm mt-3 transition-colors"
-              >
-                Resend code
-              </button>
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem' }}>
+              <Tab id="overview" label="📋 Overview" />
+              <Tab id="files" label={`📁 Files (${result.files?.length ?? 0})`} />
+              <Tab id="deploy" label="🚀 Deploy" />
             </div>
-          )}
-        </div>
+
+            {activeTab === 'overview' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                {/* Steps */}
+                <div className="card" style={{ padding: '1.5rem' }}>
+                  <h3 style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '1rem' }}>Build Steps</h3>
+                  {result.steps?.map(s => (
+                    <div key={s.step} style={{
+                      display: 'flex', gap: '0.75rem', marginBottom: '1rem', alignItems: 'flex-start',
+                    }}>
+                      <div style={{
+                        width: '28px', height: '28px', borderRadius: '50%', flexShrink: 0,
+                        background: 'linear-gradient(135deg, #fbbf24, #d97706)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.75rem', fontWeight: 700, color: '#000',
+                      }}>{s.step}</div>
+                      <div>
+                        <p style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '0.88rem' }}>{s.title}</p>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{s.description}</p>
+                        <p style={{ color: 'rgba(136,136,170,0.5)', fontSize: '0.75rem', marginTop: '0.2rem' }}>⏱ {s.duration}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Folder structure */}
+                <div className="card" style={{ padding: '1.5rem' }}>
+                  <h3 style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '1rem' }}>Folder Structure</h3>
+                  <pre style={{ fontSize: '0.78rem', lineHeight: 1.6, color: '#38bdf8', overflowX: 'auto' }}>
+                    {result.folderStructure}
+                  </pre>
+                  {result.envVariables?.length > 0 && (
+                    <>
+                      <h3 style={{ fontWeight: 600, color: 'var(--text-primary)', margin: '1.25rem 0 0.75rem' }}>Environment Variables</h3>
+                      {result.envVariables.map(e => (
+                        <div key={e.key} style={{
+                          marginBottom: '0.5rem', padding: '0.4rem 0.6rem', borderRadius: '8px',
+                          background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+                        }}>
+                          <code style={{ color: '#fbbf24', fontSize: '0.78rem' }}>{e.key}</code>
+                          {e.required && <span style={{ color: '#f87171', fontSize: '0.7rem', marginLeft: '0.4rem' }}>*required</span>}
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.1rem' }}>{e.description}</p>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'files' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '1rem', minHeight: '400px' }}>
+                {/* File list */}
+                <div className="card" style={{ padding: '0.75rem', overflowY: 'auto' }}>
+                  {result.files?.map((f, i) => (
+                    <button key={i} onClick={() => setActiveFile(i)} style={{
+                      width: '100%', textAlign: 'left', padding: '0.6rem 0.75rem', borderRadius: '8px',
+                      cursor: 'pointer', marginBottom: '0.2rem', transition: 'background 0.15s',
+                      background: activeFile === i ? 'rgba(251,191,36,0.1)' : 'transparent',
+                      border: activeFile === i ? '1px solid rgba(251,191,36,0.2)' : '1px solid transparent',
+                    }}>
+                      <p style={{ fontSize: '0.78rem', color: activeFile === i ? '#fbbf24' : 'var(--text-secondary)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                        {f.path}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+
+                {/* File content */}
+                <div className="card" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  {result.files?.[activeFile] && (
+                    <>
+                      <div style={{ padding: '0.875rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <code style={{ fontSize: '0.83rem', color: '#fbbf24' }}>{result.files[activeFile].path}</code>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>{result.files[activeFile].description}</p>
+                        </div>
+                        <button onClick={() => copyToClipboard(result.files[activeFile].content)} style={{
+                          padding: '0.3rem 0.75rem', borderRadius: '6px', fontSize: '0.78rem',
+                          background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)',
+                          color: 'var(--text-secondary)', cursor: 'pointer',
+                        }}>Copy</button>
+                      </div>
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
+                        <pre style={{ fontSize: '0.8rem', lineHeight: 1.65, color: '#d4d4e8', margin: 0, background: 'none', border: 'none', padding: 0 }}>
+                          {result.files[activeFile].content}
+                        </pre>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'deploy' && (
+              <div className="card" style={{ padding: '1.5rem' }}>
+                <h3 style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '1rem' }}>🚀 Deployment Instructions</h3>
+                <div className="prose-tahir" dangerouslySetInnerHTML={{ __html: result.deployInstructions?.replace(/\n/g, '<br/>') ?? '' }} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
