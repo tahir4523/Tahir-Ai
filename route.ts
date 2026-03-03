@@ -1,45 +1,72 @@
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
+// app/api/webhooks/stripe/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { createAdminClient } from '@/lib/supabase/server';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2023-10-16' });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2024-06-20',
+});
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
+  const body = await request.text();
+  const sig = request.headers.get('stripe-signature')!;
+
+  let event: Stripe.Event;
+
   try {
-    const supabase = createRouteHandlerClient({ cookies });
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err);
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
+  }
 
-    const { data: profile } = await supabase
-      .from('profiles').select('stripe_customer_id, email').eq('id', session.user.id).single();
+  const supabase = createAdminClient();
 
-    let customerId = profile?.stripe_customer_id;
+  switch (event.type) {
+    case 'checkout.session.completed': {
+      const session = event.data.object as Stripe.CheckoutSession;
+      const userId = session.metadata?.userId;
 
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: session.user.email,
-        metadata: { supabase_user_id: session.user.id },
-      });
-      customerId = customer.id;
-      await supabase.from('profiles').update({ stripe_customer_id: customerId }).eq('id', session.user.id);
+      if (userId) {
+        await supabase
+          .from('profiles')
+          .update({
+            tier: 'pro',
+            stripe_subscription_id: session.subscription as string,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', userId);
+      }
+      break;
     }
 
-    const checkoutSession = await stripe.checkout.sessions.create({
-      customer: customerId,
-      payment_method_types: ['card'],
-      line_items: [{
-        price: process.env.STRIPE_PRO_PRICE_ID,
-        quantity: 1,
-      }],
-      mode: 'subscription',
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?upgraded=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?cancelled=true`,
-      metadata: { supabase_user_id: session.user.id },
-    });
+    case 'customer.subscription.deleted':
+    case 'customer.subscription.updated': {
+      const subscription = event.data.object as Stripe.Subscription;
 
-    return NextResponse.json({ url: checkoutSession.url });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+      // Find user by customer ID
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('stripe_customer_id', subscription.customer)
+        .single();
+
+      if (profile) {
+        const isActive =
+          event.type === 'customer.subscription.updated' &&
+          subscription.status === 'active';
+
+        await supabase
+          .from('profiles')
+          .update({
+            tier: isActive ? 'pro' : 'free',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', profile.id);
+      }
+      break;
+    }
   }
+
+  return NextResponse.json({ received: true });
 }
