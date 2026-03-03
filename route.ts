@@ -1,53 +1,62 @@
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
+// app/api/conversations/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
-import { checkRateLimit } from '@/lib/rate-limiter';
+import { createClient } from '@/lib/supabase/server';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+export async function GET(request: NextRequest) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-export async function POST(req: NextRequest) {
-  try {
-    const supabase = createRouteHandlerClient({ cookies });
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const userId = session.user.id;
+  const { data: conversations, error } = await supabase
+    .from('conversations')
+    .select('id, title, created_at, updated_at, mode')
+    .eq('user_id', user.id)
+    .order('updated_at', { ascending: false })
+    .limit(50);
 
-    // Check plan (image gen is Pro only)
-    const { data: profile } = await supabase
-      .from('profiles').select('plan').eq('id', userId).single();
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    if (profile?.plan !== 'pro') {
-      return NextResponse.json({ error: 'Image generation requires Pro plan' }, { status: 403 });
-    }
+  return NextResponse.json({ conversations });
+}
 
-    const rateCheck = checkRateLimit(`img_${userId}`, 'pro');
-    if (!rateCheck.allowed) {
-      return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
-    }
+export async function POST(request: NextRequest) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-    const { prompt, size = '1024x1024', quality = 'standard' } = await req.json();
-    if (!prompt) return NextResponse.json({ error: 'Prompt required' }, { status: 400 });
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const response = await openai.images.generate({
-      model: 'dall-e-3',
-      prompt,
-      n: 1,
-      size: size as '1024x1024' | '1792x1024' | '1024x1792',
-      quality: quality as 'standard' | 'hd',
-      response_format: 'url',
-    });
+  const { title = 'New conversation', mode = 'auto' } = await request.json();
 
-    const imageUrl = response.data[0]?.url;
-    const revisedPrompt = response.data[0]?.revised_prompt;
+  const { data: conversation, error } = await supabase
+    .from('conversations')
+    .insert({ user_id: user.id, title, mode })
+    .select()
+    .single();
 
-    // Increment usage
-    await supabase.rpc('increment_usage', { uid: userId });
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ imageUrl, revisedPrompt });
-  } catch (err: any) {
-    console.error('Image API error:', err);
-    return NextResponse.json({ error: err.message || 'Failed to generate image' }, { status: 500 });
-  }
+  return NextResponse.json({ conversation });
+}
+
+export async function DELETE(request: NextRequest) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+
+  if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 });
+
+  const { error } = await supabase
+    .from('conversations')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', user.id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  return NextResponse.json({ success: true });
 }
