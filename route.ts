@@ -1,72 +1,73 @@
-// app/api/webhooks/stripe/route.ts
+// app/api/image-gen/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
-import { createAdminClient } from '@/lib/supabase/server';
+import OpenAI from 'openai';
+import { createClient } from '@/lib/supabase/server';
+import { checkAndIncrementUsage } from '@/lib/rate-limit';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-06-20',
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(request: NextRequest) {
-  const body = await request.text();
-  const sig = request.headers.get('stripe-signature')!;
-
-  let event: Stripe.Event;
-
   try {
-    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { prompt, size = '1024x1024', quality = 'standard' } = await request.json();
+
+    if (!prompt) {
+      return NextResponse.json({ error: 'Prompt required' }, { status: 400 });
+    }
+
+    // Rate limit images
+    const usageCheck = await checkAndIncrementUsage(user.id, 'image');
+    if (!usageCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Monthly image limit reached',
+          resetAt: usageCheck.resetAt,
+          limit: usageCheck.limit,
+        },
+        { status: 429 }
+      );
+    }
+
+    const response = await openai.images.generate({
+      model: 'dall-e-3',
+      prompt,
+      n: 1,
+      size: size as '1024x1024' | '1792x1024' | '1024x1792',
+      quality: quality as 'standard' | 'hd',
+      response_format: 'url',
+    });
+
+    const imageUrl = response.data[0]?.url;
+    const revisedPrompt = response.data[0]?.revised_prompt;
+
+    if (!imageUrl) {
+      throw new Error('No image generated');
+    }
+
+    // Save to DB
+    await supabase.from('generated_images').insert({
+      user_id: user.id,
+      prompt,
+      revised_prompt: revisedPrompt,
+      image_url: imageUrl,
+      size,
+      quality,
+    });
+
+    return NextResponse.json({
+      imageUrl,
+      revisedPrompt,
+      remaining: usageCheck.remaining,
+    });
   } catch (err) {
-    console.error('Webhook signature verification failed:', err);
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
+    console.error('Image gen error:', err);
+    const message = err instanceof Error ? err.message : 'Image generation failed';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  const supabase = createAdminClient();
-
-  switch (event.type) {
-    case 'checkout.session.completed': {
-      const session = event.data.object as Stripe.CheckoutSession;
-      const userId = session.metadata?.userId;
-
-      if (userId) {
-        await supabase
-          .from('profiles')
-          .update({
-            tier: 'pro',
-            stripe_subscription_id: session.subscription as string,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', userId);
-      }
-      break;
-    }
-
-    case 'customer.subscription.deleted':
-    case 'customer.subscription.updated': {
-      const subscription = event.data.object as Stripe.Subscription;
-
-      // Find user by customer ID
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('stripe_customer_id', subscription.customer)
-        .single();
-
-      if (profile) {
-        const isActive =
-          event.type === 'customer.subscription.updated' &&
-          subscription.status === 'active';
-
-        await supabase
-          .from('profiles')
-          .update({
-            tier: isActive ? 'pro' : 'free',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', profile.id);
-      }
-      break;
-    }
-  }
-
-  return NextResponse.json({ received: true });
 }
